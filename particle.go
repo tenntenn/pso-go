@@ -32,145 +32,184 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 package pso
 
 import (
-	"reflect"
+    "math"
+    "math/rand"
+    "time"
 )
 
-// Evaluated value by target function.
-// It provides compareble function.
-type EvalValue interface {
-	// Compare with other value.
-	// It returns int value likes java.lang.Compareble in Java. 
-	CompareTo(v EvalValue) int
-}
-
-// A type for particle position vector and velocity vector.
-// It provides four arithmetic operations.
-type Values interface {
-	// Add values and return own values
-	Add(values Values) Values
-	// Subtrac values and return own values
-	Sub(values Values) Values
-	// Multiply values and return own values
-	Mul(values Values) Values
-	// Divide by values and return own values
-	Div(values Values) Values
-	// Create a clone values
-	Clone() Values
-	// Return random values
-	Random() Values
-}
-
 // Range of values.
-type Range interface {
-	// Either values is in this range or not.	
-	In(values Values) bool
-	// Type of target values.
-	Type() reflect.Type
+type Range struct {
+	min []float64
+	max []float64
+}
+
+// Create a new range.
+func NewRange(min, max []float64) *Range {
+
+	switch {
+	case min == nil:
+		panic("min cannot be nil.")
+	case max == nil:
+		panic("max cannot be nil.")
+	case len(min) != len(max):
+		panic("length of min and max have to be same.")
+	}
+
+	return &Range{min, max}
+}
+
+// Get either the vector is in this range or not.
+func (r *Range) In(vector []float64) bool {
+
+    switch {
+    case vector == nil:
+        panic("vector cannot be nil")
+    }
+
+	if len(vector) != len(r.min) {
+		panic("length of values have to be same with minx and max.")
+	}
+
+	for i := range vector {
+		if vector[i] < r.min[i] || vector[i] > r.max[i] {
+			return false
+		}
+	}
+
+	return true
+}
+
+func (r *Range) Min() []float64 {
+    if r.min == nil {
+        return nil
+    }
+    cpy := make([]float64, len(r.min))
+    copy(cpy, r.min)
+    return cpy
+}
+
+func (r *Range) Max() []float64 {
+    if r.max == nil {
+        return nil
+    }
+    cpy := make([]float64, len(r.max))
+    copy(cpy, r.max)
+    return cpy
 }
 
 // It is type of particle which find a result of optimization.
 type Particle struct {
 	// Current position
-	position Values
+	position []float64
 	// Current velocity
-	velocity Values
+	velocity []float64
 	// range of position
-	valuesRange Range
+	valuesRange *Range
 	// evaluated value by target function
-	evalValue EvalValue
+	evalValue float64
 	// local best of this particle
-	best Values
-	// a channel which is used for communication with solver
-	ch chan<- Values
+	best []float64
 }
 
 // Create a new particle.
-func NewParticle(position, velocity Values, valuesRange Range) *Particle {
+func NewParticle(position, velocity []float64, valuesRange *Range) *Particle {
 
 	switch {
 	case position == nil:
 		panic("position cannot be nil.")
 	case velocity == nil:
 		panic("velocity cannot be nil.")
-	case reflect.TypeOf(position) != reflect.TypeOf(velocity):
-		panic("position and velocity have to be same type.")
-	case reflect.TypeOf(position) != valuesRange.Type():
-		panic("type of position and valuesRange.Type() have to be same.")
+    case len(position) != len(velocity):
+        panic("length of position and velocity have to be same.")
 	}
 
-	ch := chan <-Values(make(chan Values))
+    cpyPos := make([]float64, len(position))
+    copy(cpyPos, position)
 
-	return &Particle{position, velocity, valuesRange, nil, nil, ch}
+    cpyVelocity := make([]float64, len(velocity))
+    copy(cpyVelocity, velocity)
+
+
+    best := make([]float64, len(position))
+    copy(best, position)
+
+	return &Particle{cpyPos, cpyVelocity, valuesRange, math.MaxFloat64, best}
 }
 
 // Get the position of particle on the solution space.
-func (p *Particle) Position() Values {
+func (p *Particle) Position() []float64 {
 	return p.position
 }
 
 // Get the position of particle.
-func (p *Particle) Velocity() Values {
+func (p *Particle) Velocity() []float64 {
 	return p.velocity
 }
 
 // Get the range of position.
-func (p *Particle) Range() Range {
+func (p *Particle) Range() *Range {
 	return p.valuesRange
 }
 
 // Get the evaluated value by target function.
-func (p *Particle) EvalValue() EvalValue {
+func (p *Particle) EvalValue() float64 {
 	return p.evalValue
 }
 
-// Get the channel which is used by communication with the solver.
-func (p *Particle) Channel() chan<-Values {
-	return p.ch
+// Get the local best of the particle.
+func (p *Particle) Best() []float64 {
+    if p.best == nil {
+        return nil
+    }
+
+    cpy := make([]float64, len(p.best))
+	return cpy
 }
 
-func (p *Particle) Best() Values {
-	return p.best
-}
+// Do a step of the particle.
+func (p *Particle) Step(f TargetFunc, param *Param, globalBest []float64) {
 
-// Start tparticle process.
-// If ch is closed, process stop.
-func (p *Particle) Start(f TargetFunc, param *Param, ch <-chan Values) {
+    switch {
+    case f == nil:
+        panic("f cannot be nil.")
+    case param == nil:
+        panic("param cannot be nil.")
+    case globalBest == nil:
+        panic("globalBest cannot be nil.")
+    case len(globalBest) != len(p.position):
+        panic("length of particle position and globalBest have to be same")
+    }
 
-	// Update global best
-	globalBest, isRun := <- ch
-	go func() {
-		for {
-			globalBest, isRun = <- ch
-		}
-	}()
-	
-	for isRun {
-		
-		// update position with velocity
-		newPosition := p.position.Clone().Add(p.velocity)
-		if p.valuesRange.In(newPosition) {
-			p.position = newPosition
-		}
-		
-		// update velocity
-		r1 := p.velocity.Random()
-		r2 := p.velocity.Random()
-		// v <- w*v
-		p.velocity.Mul(param.W())
-		// r1 <- r1*c1*(ownBest - x)
-		r1.Mul(param.C1()).Mul(p.best.Clone().Sub(p.position))
-		// r2 <- r2*c2*(best - x)
-		r2.Mul(param.C2()).Mul(globalBest.Clone().Sub(p.position))
-		// v <- w*v + c1*r1*(ownBest - x) + c2*r2*(best - x)
-		p.velocity.Add(r1).Add(r2)
+    oldPosition := make([]float64, len(p.position))
+    c1 := param.C1()
+    c2 := param.C2()
+    w  := param.W()
+    copy(oldPosition, p.position)
 
-		// send best value to solver
-		p.evalValue = f.Eval(p.position)
-		bestValue := f.Eval(p.best)
-		if p.evalValue.CompareTo(bestValue) < 0 {
-			p.best = p.position
-			p.ch <- p.position
-		}
-		
-	}
+    // random generator
+    var rnd = rand.New(rand.NewSource(time.Now().UnixNano()))
+
+    for i := range p.position {
+        // move
+        p.position[i] += p.velocity[i]
+
+        // Random value
+        r1 := rnd.Float64()
+        r2 := rnd.Float64()
+
+        // update velocity
+        p.velocity[i] = w[i] * p.velocity[i] + r1 * c1[i] * (p.best[i] - p.position[i]) * r2 * c2[i] * (globalBest[i] - p.position[i])
+    }
+
+    // Over the range?
+    if !p.valuesRange.In(p.position) {
+        copy(p.position, oldPosition)
+    }
+
+    // Update best
+    p.evalValue = f(p.position)
+    bestValue := f(p.best)
+    if p.evalValue < bestValue {
+        copy(p.best, p.position)
+    }
 }

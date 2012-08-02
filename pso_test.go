@@ -32,57 +32,74 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 package pso
 
 import (
-	"./float64"
-	"fmt"
 	"testing"
+    "math"
+    "math/rand"
+    "time"
 )
 
-func TestFloat64(t *testing.T) {
+type Pos []float64
+
+func NewPos(x, y float64) Pos {
+    return Pos([]float64{x, y})
+}
+
+func (p Pos) X() float64 {
+    return p[0]
+}
+
+func (p Pos) Y() float64 {
+    return p[1]
+}
+
+func TestSolvingSimultaneousEquation(t *testing.T) {
+
+    t.Log("Test solving simultaneous equation as followings.")
+    t.Log("x + y - 3 = 0")
+    t.Log("2x + 5y - 9 = 0")
 
 	// x + y - 3 = 0
 	// 2x + 5y - 9 = 0
-	f := func(values float64.Float64Array) float64.EvalValue {
-		arry := []float64(values)
-		x := arry[0]
-		y := arry[1]
-		
-		return (x + y - 3) + (2 * x + 5 * y - 9)
+	f := func(vector []float64) float64 {
+        p := Pos(vector)
+
+		return math.Pow(p.X() + p.Y() - 3, 2) + math.Pow(2 * p.X() + 5 * p.Y() - 9, 2)
 	}
 
+    // random generator
+    var rnd = rand.New(rand.NewSource(time.Now().UnixNano()))
+
 	// Create particles
-	const count = 100
+	const count = 1000
 	particles := make([]*Particle, count)
-	a := float64.Float64Array([]float64{0.0, 0.0})
 	for i := range particles {
-		position := a.Random()
-		velocity := a.Random()
-		valuesRange := float64.NewRangeWithInf(len(a))
+		position := NewPos(float64(rnd.Intn(20) - 10), float64(rnd.Intn(20) - 10))
+		velocity := NewPos(float64(rnd.Intn(20) - 10), float64(rnd.Intn(20) - 10))
+        min := NewPos(-10, -10)
+        max := NewPos(10, 10)
+		valuesRange := NewRange(min, max)
 		particles[i] = NewParticle(position, velocity, valuesRange)
 	}
 
 	// Create a solver
-	w := float64.Float64Array([]float64{0.9, 0.9})
-	c1 := float64.Float64Array([]float64{0.9, 0.9})
-	c2 := float64.Float64Array([]float64{0.9, 0.9})
+	w := NewPos(0.9, 0.9)
+	c1 := NewPos(0.9, 0.9)
+	c2 := NewPos(0.9, 0.9)
 	param := NewParam(w, c1, c2)
-	solver := NewSolver(float64.TargetFunc(f), particles, param)
+	solver := NewSolver(TargetFunc(f), particles, param)
 
-	// Start solver process
-	done := make(chan bool)
-	defer func() {
-		close(done)
-	}()
-	go solver.Start(chan <-bool(done))
+    const STEP = 1000
+    solver.Run(0.00001, STEP)
 
-	for {
-		if solver.Best() != nil {
-			bestValue := solver.TargetFunc().Eval(solver.Best())
-			endValue := float64.EvalValue(0.0001)
-			if bestValue.CompareTo(endValue) < 0 {
-				done <- true
-				fmt.Printf("%v\n", solver.Best())
-				break
-			}
-		}
-	}
+    best := Pos(solver.Best())
+
+    // check X
+    if math.Abs(best.X() - 2.0) >= 0.001 {
+        t.Errorf("Expect x = 2.0 but accutual %f", best.X())
+    }
+
+    // check Y
+    if math.Abs(best.Y() - 1.0) >= 0.001 {
+        t.Errorf("Expect y = 1.0 but accutual %f", best.X())
+    }
 }

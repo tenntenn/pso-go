@@ -32,24 +32,21 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 package pso
 
 import (
-	"reflect"
+    "math"
 )
 
 // Target function
-type TargetFunc interface {
-	Eval(values Values) EvalValue
-	Type() reflect.Type
-}
+type TargetFunc func(vector []float64) float64
 
 // Params of a solver.
 type Param struct {
-	w  Values
-	c1 Values
-	c2 Values
+	w  []float64
+	c1 []float64
+	c2 []float64
 }
 
 // Create a new Param.
-func NewParam(w, c1, c2 Values) *Param {
+func NewParam(w, c1, c2 []float64) *Param {
 
 	switch {
 	case w == nil:
@@ -58,26 +55,25 @@ func NewParam(w, c1, c2 Values) *Param {
 		panic("c1 cannot be nil.")
 	case c2 == nil:
 		panic("c2 cannot be nil.")
-	case reflect.TypeOf(w) != reflect.TypeOf(c1) ||
-			reflect.TypeOf(w) != reflect.TypeOf(c2) :
-		panic("all parameter type have to be same.")
+	case len(w) != len(c1) || len(w) != len(c2):
+		panic("length of w and c1 and c2 have to be same.")
 	}
 
 	return &Param{w, c1, c2}
 }
 
 // Get w of param
-func (p *Param) W() Values {
+func (p *Param) W() []float64 {
 	return p.w
 }
 
 // Get c1 of param
-func (p *Param) C1() Values {
+func (p *Param) C1() []float64 {
 	return p.c1
 }
 
 // Get c2 of param
-func (p *Param) C2() Values {
+func (p *Param) C2() []float64 {
 	return p.c2
 }
 
@@ -86,7 +82,7 @@ type Solver struct {
 	f      TargetFunc
 	particles []*Particle
 	param *Param
-	best   Values
+	best []float64
 }
 
 // Create a new solver.
@@ -98,7 +94,23 @@ func NewSolver(f TargetFunc, particles []*Particle, param *Param) *Solver {
 		panic("The number of particles have to take more than 0.")
 	}
 
-	return &Solver{f, particles, param, nil}
+    var bestValue float64
+    var best []float64
+    for _, p := range particles {
+        if p == nil {
+            continue
+        }
+
+        if best == nil {
+            best = p.position
+            bestValue = f(best)
+        } else if f(p.position) < bestValue {
+            copy(best, p.position)
+            bestValue = f(best)
+        }
+    }
+
+	return &Solver{f, particles, param, best}
 }
 
 // Get the target function.
@@ -123,62 +135,51 @@ func (s *Solver) Param() *Param {
 
 // Get best values.
 // Before start steps it takes nil.
-func (s *Solver) Best() Values {
-	return s.best
+func (s *Solver) Best() []float64 {
+    if s.best == nil {
+        return nil
+    }
+
+    cpy := make([]float64, len(s.best))
+    copy(cpy, s.best)
+	return cpy
 }
 
-// Start solver process.
-// If it catches true value through ch, process stops.
-func (s *Solver) Start(ch <-chan bool) {
+// Do a step of solver process.
+func (s *Solver) Step() {
 
-	bestCh := make(chan Values)
-	defer func() {
-		close(bestCh)
-	}()
-
-	// start particles process
-	for _, p := range s.particles {
+    bestValue := s.f(s.best)
+    for _, p := range s.particles {
 		if p == nil {
 			continue
 		}
 
-		go p.Start(s.f, s.param, (<-chan Values)(bestCh))
+        if s.best == nil {
+            s.best = p.Best()
+            bestValue = s.f(s.best)
+        }
+
+		p.Step(s.f, s.param, s.best)
+        if p.EvalValue() < bestValue {
+//            println("update!")
+            copy(s.best, p.best)
+            bestValue = p.EvalValue()
+        }
 	}
 
-	// waiting for  done signal
-	done := false
-	go func() {
-		for !done {
-			done = <-ch
-		}
-	}()
-	
-	var bestValue EvalValue
-	for {
-		localBest := <-bestCh
-		localBestValue := s.TargetFunc().Eval(localBest)
-		if bestValue == nil || localBestValue.CompareTo(bestValue) < 0 {
-			s.best = localBest
-			bestValue = localBestValue
-			for _, p := range s.particles {
-				if p == nil {
-					continue
-				}
-				
-				// send global best to particle
-				p.Channel() <- s.best
-			}
-		}
+}
 
-		if done {
-			for _, p := range s.particles {
-				if p == nil {
-					continue
-				}
-				
-				close(p.Channel())
-			}
-			break
-		}
-	}
+// Run solver process.
+// If evaluated value is not change with error value or step count is over maxcount,
+// the process will be stop.
+func (s *Solver) Run(errorValue float64, maxcount uint) {
+    pre := math.MaxFloat64
+    for i := uint(0); i < maxcount; i++ {
+        s.Step()
+        v := s.f(s.best)
+        if math.Abs(pre - v) <= errorValue {
+            break
+        }
+        pre = v
+    }
 }
